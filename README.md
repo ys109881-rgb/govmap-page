@@ -1,33 +1,26 @@
 # govmap-page
 
-A GovMap (the Israeli government map portal) page hosted on GitHub Pages and embedded in an iframe by the "ת"ת קרית מלך" CRM (Electron).
+A relay page for GovMap (the Israeli government map portal) API calls from the "ת"ת קרית מלך" CRM (an Electron desktop app).
 
-GovMap API tokens are bound to a domain, so the map runs here, at
-`https://ys109881-rgb.github.io/govmap-page/`, and the app controls it via `postMessage`.
+GovMap API tokens are bound to a domain, and the desktop app has none. So the app loads this page,
+`https://ys109881-rgb.github.io/govmap-page/`, in a hidden iframe and sends its requests through it via `postMessage`.
+The requests reach GovMap from the `ys109881-rgb.github.io` domain.
 
-## Setup
+- The token is registered in GovMap for the domain `ys109881-rgb.github.io`.
+- The token is **not** stored here: the app sends it with each request (from its settings).
+- Requests are accepted only from the parent window, and only from the origins in `ALLOWED_ORIGINS` (`file://` = the installed app, `http://localhost:5173` = development).
 
-1. In the GovMap personal area (User options → API management), issue a token for the domain `ys109881-rgb.github.io`.
-2. Put the token in `index.html`: `const GOVMAP_TOKEN = '...';`
-3. Commit and push. GitHub Pages publishes the page within about a minute.
-
-The token is visible in the page source; that is how GovMap works, since the protection is the domain binding.
-
-## Message protocol
+## Protocol
 
 App → page:
 ```js
-{ source: 'tat-app', id: 1, command: 'zoomToXY', params: { x: 180553, y: 574243, level: 9, marker: true } }
+{ source: 'tat-app', id: 1, command: 'search', params: { apiKey, searchText: 'הרב שך 10 בני ברק', maxResults: 5 } }
 ```
 Page → app:
 ```js
 { source: 'govmap-page', type: 'ready' }
-{ source: 'govmap-page', type: 'result', id: 1, ok: true, result: ... }   // or ok: false, error: '...'
-{ source: 'govmap-page', type: 'event', event: 'click', data: { x, y } }
-{ source: 'govmap-page', type: 'error', error: '...' }
+{ source: 'govmap-page', type: 'result', id: 1, ok: true, result: { results: [...] } }
+{ source: 'govmap-page', type: 'result', id: 1, ok: false, status: 401, error: '...' }   // status 0 = network failure
 ```
 
-Commands: `zoomToXY`, `setMapMarker`, `clearMapMarker`, `setBackground`, `search`, `geocode`, `searchAndLocate`, `displayGeometries`, `clearGeometriesByName`, `ping`.
-Coordinates are Israeli Transverse Mercator (ITM, EPSG:2039).
-
-Commands are accepted only from the parent window, and only from the origins in `ALLOWED_ORIGINS` (`file://` = the installed app, `http://localhost:5173` = development).
+Coordinates in the results (`centroid`) are Israeli Transverse Mercator (ITM, EPSG:2039).
