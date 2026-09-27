@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GovMap</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    #map { width: 100%; height: 100vh; }
+    #status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+              font: 16px Arial, sans-serif; color: #b91c1c; background: #fff; text-align: center; padding: 24px; }
+  </style>
+  <script>
+    // GovMap API token. It is bound to this page's domain (USERNAME.github.io),
+    // registered in the GovMap personal area -> "ניהול API".
+    const GOVMAP_TOKEN = 'PUT_TOKEN_HERE';
+
+    // Pages allowed to control this map (the embedding Electron app):
+    //   file://                - the packaged app (loaded with loadFile)
+    //   http://localhost:5173  - the app in development (Vite dev server)
+    const ALLOWED_ORIGINS = ['file://', 'http://localhost:5173'];
+
+    const MSG_SOURCE = 'govmap-page';
+
+    // Replies go to the parent window only. A file:// parent cannot be named as
+    // a postMessage target origin, so '*' is used for it; the payload is map data only.
+    function postToParent(message, origin) {
+      const target = origin && origin.startsWith('http') ? origin : '*';
+      window.parent.postMessage({ source: MSG_SOURCE, ...message }, target);
+    }
+
+    // postMessage only carries structured-cloneable data; strip anything else.
+    function toPlain(value) {
+      return value === undefined ? null : JSON.parse(JSON.stringify(value));
+    }
+
+    function showStatus(text) {
+      const el = document.getElementById('status');
+      el.textContent = text;
+      el.style.display = 'flex';
+    }
+
+    // Enum parameters may be sent by name (e.g. geometryType: 'POINT').
+    function resolveEnum(enumObj, value) {
+      return typeof value === 'string' && enumObj && value in enumObj ? enumObj[value] : value;
+    }
+
+    // Commands the app may call. Each returns a value or a Promise; fire-and-forget
+    // govmap functions (zoomToXY, setMapMarker, ...) resolve with null.
+    const COMMANDS = {
+      zoomToXY: (p) => govmap.zoomToXY(p),                       // { x, y, level, marker }
+      setMapMarker: (p) => govmap.setMapMarker(p),               // { x, y }
+      clearMapMarker: () => govmap.clearMapMarker(),
+      setBackground: (p) => govmap.setBackground(p.background),  // { background: 0 | 1 | ... }
+      geocode: (p) => govmap.geocode({ ...p, type: resolveEnum(govmap.geocodeType, p.type ?? 'FullResult') }),
+      searchAndLocate: (p) => govmap.searchAndLocate({ ...p, type: resolveEnum(govmap.locateType, p.type) }),
+      search: (p) => govmap.search({ language: 'he', ...p, apiKey: GOVMAP_TOKEN }), // { searchText, maxResults }
+      displayGeometries: (p) => govmap.displayGeometries({ ...p, geometryType: resolveEnum(govmap.geometryType, p.geometryType) }),
+      clearGeometriesByName: (p) => govmap.clearGeometriesByName(p.names),
+    };
+
+    let mapReady = false;
+
+    window.addEventListener('message', async (event) => {
+      if (!ALLOWED_ORIGINS.includes(event.origin) || event.source !== window.parent) return;
+      const msg = event.data;
+      if (!msg || msg.source !== 'tat-app' || typeof msg.command !== 'string') return;
+
+      // The app pings when the iframe loads, in case it missed the 'ready' message.
+      if (msg.command === 'ping') {
+        if (mapReady) postToParent({ type: 'ready' }, event.origin);
+        return;
+      }
+
+      const reply = (body) => postToParent({ type: 'result', id: msg.id, ...body }, event.origin);
+      const handler = Object.prototype.hasOwnProperty.call(COMMANDS, msg.command) ? COMMANDS[msg.command] : null;
+      if (!handler) return reply({ ok: false, error: `Unknown command: ${msg.command}` });
+      if (!mapReady) return reply({ ok: false, error: 'Map is not ready yet' });
+
+      try {
+        reply({ ok: true, result: toPlain(await handler(msg.params || {})) });
+      } catch (err) {
+        reply({ ok: false, error: String((err && err.message) || err) });
+      }
+    });
+
+    function initGovMap() {
+      if (GOVMAP_TOKEN === 'PUT_TOKEN_HERE') {
+        showStatus('לא הוגדר GOVMAP_TOKEN בקובץ index.html');
+        postToParent({ type: 'error', error: 'GOVMAP_TOKEN is not set' });
+        return;
+      }
+      govmap.createMap('map', {
+        token: GOVMAP_TOKEN,
+        background: '0',
+        layersMode: 4,
+        zoomButtons: true,
+        identifyOnClick: false,
+        onLoad: () => {
+          mapReady = true;
+          postToParent({ type: 'ready' });
+        },
+        onClick: (e) => {
+          const p = e && e.mapPoint;
+          if (p) postToParent({ type: 'event', event: 'click', data: { x: p.x, y: p.y } });
+        },
+        onError: (e) => {
+          showStatus('טעינת המפה נכשלה. ודא שהמפתח תקין ושהדומיין רשום אליו ב-GovMap.');
+          postToParent({ type: 'error', error: String((e && e.message) || e || 'createMap failed') });
+        },
+      });
+    }
+
+    function onGovmapScriptError() {
+      showStatus('לא ניתן לטעון את ספריית GovMap. בדוק את חיבור האינטרנט.');
+      postToParent({ type: 'error', error: 'Failed to load govmap.api.js' });
+    }
+  </script>
+  <script src="https://www.govmap.gov.il/govmap/api/govmap.api.js" defer onload="initGovMap()" onerror="onGovmapScriptError()"></script>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="status" style="display:none"></div>
+</body>
+</html>
