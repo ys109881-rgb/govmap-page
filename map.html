@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GovMap map</title>
+  <style>
+    html, body, #map { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #eef1f6; }
+  </style>
+  <script src="https://www.govmap.gov.il/govmap/api/govmap.api.js"></script>
+
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    // Shows a GovMap map inside the "ת"ת קרית מלך" desktop app (Electron).
+    // GovMap tokens are bound to a domain and the app (file://) has none, so the
+    // app shows this page (ys109881-rgb.github.io) in an iframe and drives the
+    // map via postMessage. The token arrives from the app's settings in the
+    // 'init' message and is not stored in this page.
+    //
+    // Coordinates in all messages are Israeli Transverse Mercator (ITM, EPSG:2039).
+
+    // Pages allowed to use this map (same as index.html):
+    //   file://                - the packaged app (loaded with loadFile)
+    //   http://localhost:5173  - the app in development (Vite dev server)
+    const ALLOWED_ORIGINS = ['file://', 'http://localhost:5173'];
+
+    // The app's dots: one round image, drawn at the size each point asks for.
+    const DOT_URL = new URL('dot.png', location.href).href;
+    const POINTS_NAME = 'tat-points';
+
+    let parentOrigin = null;
+    let created = false;
+
+    // A file:// parent cannot be named as a postMessage target origin, so '*' is used for it.
+    function postToParent(message) {
+      const target = parentOrigin && parentOrigin.startsWith('http') ? parentOrigin : '*';
+      window.parent.postMessage({ source: 'govmap-map', ...message }, target);
+    }
+
+    function createMap(p) {
+      if (created) return;
+      created = true;
+      govmap.createMap('map', {
+        token: p.token,
+        center: p.center,
+        level: p.level,
+        setMapMarker: !!p.marker,
+        background: '0',
+        layers: [],
+        visibleLayers: [],
+        identifyOnClick: false,
+        showXY: false,
+        zoomButtons: true,
+        bgButton: true,
+        isEmbeddedToggle: true,
+        layersMode: 4,
+        onError: (e) => postToParent({ type: 'error', error: String((e && e.message) || e || 'error') }),
+        onLoad: () => {
+          govmap.onEvent(govmap.events.CLICK).progress((e) => {
+            const pt = e && e.mapPoint;
+            if (pt) postToParent({ type: 'click', x: pt.x, y: pt.y });
+          });
+          postToParent({ type: 'loaded' });
+        },
+      }).catch((e) => postToParent({ type: 'error', error: String((e && e.message) || e) }));
+    }
+
+    const COMMANDS = {
+      init: createMap,
+      // { x, y, level, marker }
+      zoomTo: (p) => govmap.zoomToXY({ x: p.x, y: p.y, level: p.level, marker: !!p.marker }),
+      // { x, y } or null to remove the marker
+      marker: (p) => {
+        govmap.clearMapMarker();
+        if (p && typeof p.x === 'number') govmap.setMapMarker({ x: p.x, y: p.y });
+      },
+      // { points: [{ x, y, size, tooltip }] } - replaces the dots shown before
+      points: (p) => {
+        govmap.clearGeometriesByName([POINTS_NAME]);
+        const pts = (p && p.points) || [];
+        if (!pts.length) return;
+        govmap.displayGeometries({
+          wkts: pts.map(pt => `POINT(${pt.x} ${pt.y})`),
+          names: pts.map(() => POINTS_NAME),
+          geometryType: govmap.geometryType.POINT,
+          defaultSymbol: { url: DOT_URL, width: 12, height: 12 },
+          symbols: pts.map(pt => ({ url: DOT_URL, width: pt.size || 12, height: pt.size || 12 })),
+          clearExisting: false,
+          showBubble: false,
+          data: { tooltips: pts.map(pt => pt.tooltip || '') },
+        });
+      },
+    };
+
+    window.addEventListener('message', (event) => {
+      if (!ALLOWED_ORIGINS.includes(event.origin) || event.source !== window.parent) return;
+      const msg = event.data;
+      if (!msg || msg.source !== 'tat-app' || typeof msg.command !== 'string') return;
+      if (!Object.prototype.hasOwnProperty.call(COMMANDS, msg.command)) return;
+      parentOrigin = event.origin;
+      if (msg.command !== 'init' && !created) return;
+      try {
+        COMMANDS[msg.command](msg.params || {});
+      } catch (err) {
+        postToParent({ type: 'error', error: String((err && err.message) || err) });
+      }
+    });
+
+    postToParent({ type: 'ready' });
+  </script>
+</body>
+</html>
