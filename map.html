@@ -39,6 +39,14 @@
       window.parent.postMessage({ source: 'govmap-map', ...message }, target);
     }
 
+    // govmap.api.js only logs a rejected token (and then never loads the map),
+    // so its log line is passed on - the app shows its regular map at once.
+    const consoleError = console.error.bind(console);
+    console.error = (...args) => {
+      consoleError(...args);
+      if (String(args[0]).includes('authentication failed')) postToParent({ type: 'error', error: 'auth' });
+    };
+
     function createMap(p) {
       if (created) return;
       created = true;
